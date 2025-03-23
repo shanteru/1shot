@@ -133,7 +133,18 @@ st.markdown("""
         background-color: rgba(255, 255, 255, 0.05) !important;
     }
     
-    /* Chat message container */
+    /* Chat container */
+    .chat-container {
+        height: 400px;
+        overflow-y: scroll;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 0.5rem;
+        padding: 1rem;
+        margin-bottom: 1rem;
+        background-color: rgba(255, 255, 255, 0.05);
+    }
+    
+    /* Chat message styles */
     .chat-message {
         padding: 1rem;
         border-radius: 0.5rem;
@@ -202,58 +213,65 @@ if 'active_section' not in st.session_state:
 if 'segments_loaded' not in st.session_state:
     st.session_state.segments_loaded = False
 
-# Configuration
+if 'template_uploaded' not in st.session_state:
+    st.session_state.template_uploaded = False
+
+# Initialize next_input for handling suggestions
+if 'next_input' not in st.session_state:
+    st.session_state.next_input = ""
+
+# Configuration - modify these for your environment
 BUCKET_NAME = os.environ.get('S3_BUCKET_NAME', 'knowledgebase-bedrock-agent-ab3')
 AGENT_ID = os.environ.get('AGENT_ID', '')
 AGENT_ALIAS_ID = os.environ.get('AGENT_ALIAS_ID', 'TSTALIASID')
+ITEMS_CSV_PATH = 'data/travel_items.csv'
+USERS_CSV_PATH = 'data/travel_users.csv'
+SEGMENTS_OUTPUT_PATH = 'segments/batch_segment_input_ab3.json.out'
+EMAIL_TEMPLATES_PATH = 'email_templates/'
 
 # Helper functions
 @st.cache_resource
 def get_aws_clients():
     try:
-        # First, try to use environment variables or instance profile
+        # Initialize AWS clients with proper credentials
         s3_client = boto3.client('s3')
-
-        # Check if Bedrock agent is available in the region
+        
         bedrock_regions = boto3.Session().get_available_regions('bedrock-agent-runtime')
         current_region = boto3.Session().region_name
-
-        # If the current region doesn't support Bedrock, use us-east-1
         bedrock_region = current_region if current_region in bedrock_regions else 'us-east-1'
-
+        
         bedrock_agent_client = boto3.client(
             'bedrock-agent-runtime',
             region_name=bedrock_region
         )
-
+        
         return s3_client, bedrock_agent_client
     except Exception as e:
         st.error(f"Error initializing AWS clients: {str(e)}")
-        # Return dummy clients for UI development
-        from unittest.mock import MagicMock
-        return MagicMock(), MagicMock()
+        return None, None
 
-@st.cache_data(ttl=300)
 def read_s3_csv(bucket, key):
     """Read CSV data from S3"""
     try:
+        s3_client, _ = get_aws_clients()
+        if not s3_client:
+            return None
+            
         response = s3_client.get_object(Bucket=bucket, Key=key)
         content = response['Body'].read().decode('utf-8')
         df = pd.read_csv(StringIO(content))
         return df
     except Exception as e:
         st.error(f"Error reading CSV from S3: {str(e)}")
-        # For demo purposes, return a sample DataFrame
-        if "items" in key:
-            return get_sample_flights()
-        elif "users" in key:
-            return get_sample_users()
         return None
 
-@st.cache_data(ttl=300)
 def read_s3_json(bucket, key):
     """Read JSONL data from S3"""
     try:
+        s3_client, _ = get_aws_clients()
+        if not s3_client:
+            return None
+            
         response = s3_client.get_object(Bucket=bucket, Key=key)
         content = response['Body'].read().decode('utf-8')
         json_objects = []
@@ -262,215 +280,25 @@ def read_s3_json(bucket, key):
                 json_objects.append(json.loads(line))
         return json_objects
     except Exception as e:
-        # For demo, return sample data
-        return get_sample_segments()
+        st.error(f"Error reading JSON from S3: {str(e)}")
+        return None
 
-def get_sample_flights():
-    """Return sample flight data for demo"""
-    return pd.DataFrame({
-        'ITEM_ID': [
-            '123e4567-e89b-12d3-a456-426614174000',
-            '223e4567-e89b-12d3-a456-426614174001',
-            '323e4567-e89b-12d3-a456-426614174002'
-        ],
-        'SRC_CITY': ['Singapore', 'Tokyo', 'Hong Kong'],
-        'DST_CITY': ['Hong Kong', 'Paris', 'London'],
-        'AIRLINE': ['PandaPaw Express', 'KoalaHug Express', 'ButterflyWing Express'],
-        'DURATION_DAYS': [10, 14, 7],
-        'MONTH': ['October', 'November', 'December'],
-        'PROMOTION': ['Yes', 'Yes', 'Yes'],
-        'DYNAMIC_PRICE': [5200, 7800, 6500],
-        'DISCOUNT_FOR_MEMBER': [0.2, 0.15, 0.25],
-        'EXPIRED': ['No', 'No', 'No']
-    })
-
-def get_sample_users():
-    """Return sample user data for demo"""
-    return pd.DataFrame({
-        'USER_ID': [f'user-{i}' for i in range(1, 500)],
-        'MEMBER_TIER': ['Gold', 'Silver', 'Member'] * 166 + ['Gold']
-    })
-
-def get_sample_segments():
-    """Return sample segment data for demo"""
-    return [
-        {
-            'input': {'itemId': '123e4567-e89b-12d3-a456-426614174000'},
-            'output': {'usersList': [f'user-{i}' for i in range(1, 150)]}
-        },
-        {
-            'input': {'itemId': '223e4567-e89b-12d3-a456-426614174001'},
-            'output': {'usersList': [f'user-{i}' for i in range(100, 250)]}
-        },
-        {
-            'input': {'itemId': '323e4567-e89b-12d3-a456-426614174002'},
-            'output': {'usersList': [f'user-{i}' for i in range(200, 350)]}
-        }
-    ]
-
-def display_chat_message(role, content):
-    """Display a chat message with appropriate styling"""
-    if role == "user":
-        st.markdown(f'<div class="chat-message user"><div class="avatar">👤</div><div class="content">{content}</div></div>', unsafe_allow_html=True)
-    else:
-        st.markdown(f'<div class="chat-message assistant"><div class="avatar">🎯</div><div class="content">{content}</div></div>', unsafe_allow_html=True)
-
-def invoke_agent(prompt, session_id=None):
-    """Invoke the Bedrock Agent with a prompt and return the response"""
-    if not session_id:
-        session_id = f"session-{int(time.time())}"
-        
-    # Define mock responses for different prompts
-    mock_responses = {
-        "generate email": """
-I'll help you generate a personalized email for that flight promotion.
-
-Based on the flight details:
-- Source: Singapore
-- Destination: Hong Kong
-- Month: October
-- Airline: PandaPaw Express
-- Price: $5,200
-- Duration: 10 days
-
-Here's a suggested email template:
-
-Subject: Exclusive October Offer: Singapore to Hong Kong with PandaPaw Express
-
-Dear Valued Traveler,
-
-We've noticed your interest in Asian destinations and are excited to offer you an exclusive opportunity to explore the vibrant city of Hong Kong this October!
-
-✈️ Singapore to Hong Kong
-🗓️ Travel Period: October 2023
-💰 Special Price: $5,200 (20% discount for members!)
-⭐ Duration: 10 days
-🛫 Airline: PandaPaw Express
-
-During your 10-day adventure, you might enjoy:
-• Experiencing the breathtaking view from Victoria Peak
-• Exploring the bustling markets of Mong Kok
-• Taking the iconic Star Ferry across Victoria Harbour
-• Savoring authentic dim sum at local restaurants
-• Visiting the Big Buddha on Lantau Island
-
-Book now at https://wanderly.travel/booking and use promo code 74000 to secure this special offer!
-
-Best regards,
-The Wanderly Team
-""",
-        "list flights": """
-Here are the promotional flights available:
-
-1. Singapore to Hong Kong (PandaPaw Express, October, $5,200)
-   - 10-day trip
-   - Has user segment: Yes (149 users)
-   
-2. Tokyo to Paris (KoalaHug Express, November, $7,800)
-   - 14-day trip
-   - Has user segment: Yes (150 users)
-   
-3. Hong Kong to London (ButterflyWing Express, December, $6,500)
-   - 7-day trip
-   - Has user segment: Yes (150 users)
-
-To generate an email template for any of these flights, just ask me!
-""",
-        "overlapping": """
-I've analyzed the user segments for your selected flights and found 100 users who appear in multiple segments. These are users who have shown interest in more than one of your promotional flights.
-
-Here's an email template targeting these overlapping users:
-
-Subject: Exclusive Travel Offers Just For You - Multiple Destinations!
-
-Dear Valued Wanderly Member,
-
-We've noticed your interest in several of our exciting destinations, and we're thrilled to present you with a curated selection of exclusive travel opportunities tailored just for you!
-
-Based on your preferences, we've selected these exceptional journeys:
-
-✈️ Singapore to Hong Kong with PandaPaw Express
-🗓️ October 2023
-💰 Special Price: $5,200 (20% off for members!)
-⭐ 10-day Adventure
-🏷️ Use code: 74000
-
-✈️ Tokyo to Paris with KoalaHug Express
-🗓️ November 2023
-💰 Special Price: $7,800 (15% off for members!)
-⭐ 14-day Getaway
-🏷️ Use code: 74001
-
-Whether you're drawn to the vibrant city life of Hong Kong or the romantic charm of Paris, we have the perfect journey waiting for you!
-
-Book now at https://wanderly.travel/booking and use the respective promotion codes to secure these special offers before they're gone!
-
-Best regards,
-The Wanderly Team
-""",
-        "segment": """
-I've analyzed the segment for the Singapore to Hong Kong flight and here are the insights:
-
-- Total Users: 149
-- Member Distribution:
-  * Gold: 54 users (36%)
-  * Silver: 49 users (33%)
-  * Regular Members: 46 users (31%)
-  
-- Key Insights:
-  * 87% of users in this segment have previously booked Asia destinations
-  * 64% have searched for Hong Kong in the last 3 months
-  * 72% prefer Economy class bookings
-  * Average previous booking value: $950
-
-Would you like me to generate an email template targeted specifically to this segment?
-"""
-    }
-    
-    # Select a mock response based on keywords in the prompt
-    response = mock_responses["generate email"]  # Default
-    
-    if "list" in prompt.lower() and "flight" in prompt.lower():
-        response = mock_responses["list flights"]
-    elif "overlap" in prompt.lower() or "multiple" in prompt.lower():
-        response = mock_responses["overlapping"]
-    elif "segment" in prompt.lower() or "analysis" in prompt.lower() or "insight" in prompt.lower():
-        response = mock_responses["segment"]
-    
+def write_to_s3(bucket, key, content):
+    """Write content to S3"""
     try:
-        # In a real app, this would call the Bedrock Agent
-        # If Agent ID is provided, make the actual call
-        if AGENT_ID and AGENT_ID != '':
-            bedrock_response = bedrock_agent_client.invoke_agent(
-                agentId=AGENT_ID,
-                agentAliasId=AGENT_ALIAS_ID,
-                sessionId=session_id,
-                inputText=prompt,
-                enableTrace=True
-            )
+        s3_client, _ = get_aws_clients()
+        if not s3_client:
+            return False
             
-            if 'completion' in bedrock_response:
-                event_stream = bedrock_response['completion']
-                full_response = ""
-                
-                for event in event_stream:
-                    if 'chunk' in event and 'bytes' in event['chunk']:
-                        try:
-                            content_bytes = event['chunk']['bytes']
-                            if isinstance(content_bytes, bytes):
-                                decoded = content_bytes.decode('utf-8')
-                                full_response += decoded
-                        except Exception as e:
-                            pass
-                
-                if full_response:
-                    return full_response
-        
-        # Return mock response if can't call real agent
-        return response
-        
+        s3_client.put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=content
+        )
+        return True
     except Exception as e:
-        return response
+        st.error(f"Error writing to S3: {str(e)}")
+        return False
 
 def extract_email_content(response_text):
     """Extract email subject and body from agent response"""
@@ -513,12 +341,162 @@ def create_segment_json(flight_ids):
         lines.append(json.dumps({"itemId": flight_id}))
     return "\n".join(lines)
 
+def invoke_agent(prompt, session_id=None):
+    """Invoke the Bedrock Agent with a prompt and return the response"""
+    if not session_id:
+        session_id = f"session-{int(time.time())}"
+    
+    _, bedrock_agent_client = get_aws_clients()
+    
+    # If agent client is not available or AGENT_ID is not set, use mock response
+    if not bedrock_agent_client or not AGENT_ID:
+        # For demonstration purposes only
+        time.sleep(2)  # Simulate API call delay
+        
+        # Simple mock response
+        if "generate email" in prompt.lower() or "email template" in prompt.lower():
+            return """
+Based on the flight details:
+- Source: Singapore
+- Destination: Hong Kong
+- Month: October
+- Airline: PandaPaw Express
+
+Here's a suggested email template:
+
+Subject: Exclusive October Offer: Singapore to Hong Kong with PandaPaw Express
+
+Dear Valued Traveler,
+
+We're excited to offer you an exclusive opportunity to explore the vibrant city of Hong Kong this October!
+
+✈️ Singapore to Hong Kong
+🗓️ Travel Period: October 2023
+💰 Special Price: $5,200 (20% discount for members!)
+⭐ Duration: 10 days
+🛫 Airline: PandaPaw Express
+
+During your stay, you might enjoy:
+• Experiencing the breathtaking view from Victoria Peak
+• Exploring the bustling markets of Mong Kok
+• Taking the iconic Star Ferry across Victoria Harbour
+• Savoring authentic dim sum at local restaurants
+• Visiting the Big Buddha on Lantau Island
+
+Book now at https://wanderly.travel/booking and use promo code 74000 to secure this special offer!
+
+Best regards,
+The Wanderly Team
+"""
+        elif "list" in prompt.lower() and "flight" in prompt.lower():
+            return """
+Here are the promotional flights available:
+
+1. Singapore to Hong Kong (PandaPaw Express, October, $5,200)
+   - 10-day trip
+   - Has user segment: Yes (149 users)
+   
+2. Tokyo to Paris (KoalaHug Express, November, $7,800)
+   - 14-day trip
+   - Has user segment: Yes (150 users)
+   
+3. Hong Kong to London (ButterflyWing Express, December, $6,500)
+   - 7-day trip
+   - Has user segment: Yes (150 users)
+
+To generate an email template for any of these flights, just ask me!
+"""
+        else:
+            return "I'll help you with that. What specific information are you looking for about the flights or email templates?"
+    
+    try:
+        # Make the actual call to Bedrock Agent
+        response = bedrock_agent_client.invoke_agent(
+            agentId=AGENT_ID,
+            agentAliasId=AGENT_ALIAS_ID,
+            sessionId=session_id,
+            inputText=prompt,
+            enableTrace=True
+        )
+        
+        # Process the response
+        if 'completion' in response:
+            event_stream = response['completion']
+            full_response = ""
+            
+            # Extract content from event stream
+            for event in event_stream:
+                if 'chunk' in event and 'bytes' in event['chunk']:
+                    try:
+                        content_bytes = event['chunk']['bytes']
+                        if isinstance(content_bytes, bytes):
+                            decoded = content_bytes.decode('utf-8')
+                            full_response += decoded
+                    except Exception as e:
+                        pass
+            
+            return full_response
+        else:
+            return "Sorry, I couldn't generate a response. Please try again."
+    except Exception as e:
+        return f"Error connecting to Bedrock Agent: {str(e)}"
+
+def upload_template_to_s3(flight_id, email_subject, email_body):
+    """Upload email template to S3"""
+    try:
+        # Format flight ID for filename
+        short_id = flight_id[-5:] if flight_id else "default"
+        
+        # Format timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Create filename
+        filename = f"email_template_{short_id}_{timestamp}.txt"
+        
+        # Format email content
+        email_content = f"Subject: {email_subject}\n\n{email_body}"
+        
+        # Save to S3
+        s3_path = f"{EMAIL_TEMPLATES_PATH}{filename}"
+        success = write_to_s3(BUCKET_NAME, s3_path, email_content)
+        
+        if success:
+            return {
+                "success": True,
+                "filename": filename,
+                "s3_path": s3_path,
+                "url": f"s3://{BUCKET_NAME}/{s3_path}"
+            }
+        else:
+            return {
+                "success": False,
+                "error": "Failed to write to S3"
+            }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+def get_segment_users(flight_id):
+    """Get segment users for a flight"""
+    try:
+        segments = read_s3_json(BUCKET_NAME, SEGMENTS_OUTPUT_PATH)
+        if not segments:
+            return []
+            
+        for segment in segments:
+            item_id = segment.get('input', {}).get('itemId')
+            if item_id == flight_id:
+                return segment.get('output', {}).get('usersList', [])
+        
+        return []
+    except Exception as e:
+        st.error(f"Error getting segment users: {str(e)}")
+        return []
+
 # Initialize AWS clients
-try:
-    s3_client, bedrock_agent_client = get_aws_clients()
-except Exception as e:
-    st.error(f"Failed to initialize AWS clients: {str(e)}")
-    s3_client, bedrock_agent_client = None, None
+s3_client, bedrock_agent_client = get_aws_clients()
 
 # Sidebar
 with st.sidebar:
@@ -534,16 +512,13 @@ with st.sidebar:
                 key="nav_flights", 
                 help="Browse and select flights for your campaign"):
         st.session_state.active_section = "flights"
-    
-    if st.button("🔍 View Segments", 
-                key="nav_segments", 
-                help="View user segments for your selected flights"):
-        st.session_state.active_section = "segments"
+        st.experimental_rerun()
     
     if st.button("✉️ Generate Emails", 
                 key="nav_emails", 
                 help="Generate personalized email content"):
         st.session_state.active_section = "emails"
+        st.experimental_rerun()
     
     st.markdown("---")
     
@@ -570,10 +545,11 @@ with st.sidebar:
         **How to use this app:**
         
         1. **Select Flights:** Choose promotional flights for your campaign
-        2. **View Segments:** Review user segments for each selected flight
-        3. **Generate Emails:** Create personalized email templates
+        2. **Generate Emails:** Create personalized email templates
+        3. **Download User List:** Get the list of users to target
+        4. **Upload to S3:** Save approved templates to S3
         
-        Need further assistance? Contact the marketing team support desk.
+        Need further assistance? Contact support at support@1shot.com
         """)
 
 # Main content area
@@ -584,7 +560,7 @@ if st.session_state.active_section == "flights":
     st.markdown("## Select Promotional Flights")
     
     # Load flight data
-    flight_df = read_s3_csv(BUCKET_NAME, 'data/travel_items.csv')
+    flight_df = read_s3_csv(BUCKET_NAME, ITEMS_CSV_PATH)
     
     if flight_df is not None:
         # Filter to show promotional flights
@@ -672,9 +648,16 @@ if st.session_state.active_section == "flights":
                             st.session_state.selected_flights.pop(i)
                             st.experimental_rerun()
                 
-                if st.button("Clear All Selections"):
-                    st.session_state.selected_flights = []
-                    st.experimental_rerun()
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("Clear All Selections", use_container_width=True):
+                        st.session_state.selected_flights = []
+                        st.experimental_rerun()
+                
+                with col2:
+                    if st.button("Generate Email Templates", use_container_width=True):
+                        st.session_state.active_section = "emails"
+                        st.experimental_rerun()
                 
                 # Generate JSON button
                 if st.button("Generate Segment Input JSON"):
@@ -695,161 +678,14 @@ if st.session_state.active_section == "flights":
     else:
         st.error("Could not load flight data.")
 
-elif st.session_state.active_section == "segments":
-    st.markdown("## User Segment Analysis")
-    
-    if not st.session_state.selected_flights:
-        st.warning("Please select flights first in the 'Select Flights' section")
-    else:
-        # Display info box
-        st.markdown('<div class="info-box">View user segments for your selected flights</div>', unsafe_allow_html=True)
-        
-        # Load segments
-        segments = read_s3_json(BUCKET_NAME, 'segments/batch_segment_input_ab3.json.out')
-        users_df = read_s3_csv(BUCKET_NAME, 'data/travel_users.csv')
-        
-        if segments:
-            st.session_state.segments_loaded = True
-            
-            # Map flight IDs to segments
-            segment_map = {}
-            for segment in segments:
-                item_id = segment.get('input', {}).get('itemId')
-                users = segment.get('output', {}).get('usersList', [])
-                if item_id and users:
-                    segment_map[item_id] = users
-            
-            # Create tabs for individual flights and overlapping analysis
-            tab1, tab2 = st.tabs(["Individual Flight Segments", "Overlapping User Analysis"])
-            
-            with tab1:
-                # Individual flight segments
-                for flight in st.session_state.selected_flights:
-                    item_id = flight['ITEM_ID']
-                    
-                    st.markdown(f"### {flight['SRC_CITY']} to {flight['DST_CITY']} ({flight['AIRLINE']})")
-                    
-                    if item_id in segment_map:
-                        users = segment_map[item_id]
-                        
-                        # Display segment stats
-                        col1, col2 = st.columns(2)
-                        
-                        with col1:
-                            st.markdown(f"**Segment Size:** {len(users)} users")
-                            
-                            if users_df is not None:
-                                segment_users = users_df[users_df['USER_ID'].isin(users)]
-                                if not segment_users.empty:
-                                    tier_counts = segment_users['MEMBER_TIER'].value_counts()
-                                    
-                                    # Show tier distribution as chart
-                                    st.markdown("**Member Tier Distribution:**")
-                                    st.bar_chart(tier_counts)
-                        
-                        with col2:
-                            # Display segment insights
-                            st.markdown("**Segment Insights:**")
-                            
-                            # These would come from the interaction data analysis in a real app
-                            st.markdown("- 78% of users rated similar flights 4+ stars")
-                            st.markdown("- 65% prefer Economy class")
-                            st.markdown("- 42% have traveled to this destination before")
-                            
-                            # Sample of users button
-                            with st.expander("View sample users"):
-                                st.code("\n".join(users[:5]) + ("\n..." if len(users) > 5 else ""))
-                            
-                            # Generate email button in the segment view
-                            if st.button(f"Generate Email Template", key=f"gen_email_{item_id}"):
-                                st.session_state.active_section = "emails"
-                                st.experimental_rerun()
-                    else:
-                        st.warning("No segment available for this flight")
-            
-            with tab2:
-                # Find overlapping users
-                if len(st.session_state.selected_flights) > 1:
-                    flight_ids = [flight['ITEM_ID'] for flight in st.session_state.selected_flights]
-                    all_users = {}
-                    
-                    # Count which users appear in multiple segments
-                    for flight_id in flight_ids:
-                        if flight_id in segment_map:
-                            for user in segment_map[flight_id]:
-                                if user not in all_users:
-                                    all_users[user] = []
-                                all_users[user].append(flight_id)
-                    
-                    # Find users in multiple segments
-                    overlapping_users = {user: flights for user, flights in all_users.items() if len(flights) > 1}
-                    
-                    if overlapping_users:
-                        st.markdown(f"### Overlapping User Analysis")
-                        
-                        # Show stats
-                        st.markdown(f"**Total Users with Multiple Interests:** {len(overlapping_users)}")
-                        
-                        # Get user tier distribution for overlapping users
-                        if users_df is not None:
-                            overlap_user_ids = list(overlapping_users.keys())
-                            overlap_users_df = users_df[users_df['USER_ID'].isin(overlap_user_ids)]
-                            
-                            if not overlap_users_df.empty:
-                                tier_counts = overlap_users_df['MEMBER_TIER'].value_counts()
-                                
-                                col1, col2 = st.columns(2)
-                                
-                                with col1:
-                                    # Display tier distribution
-                                    st.markdown("**Member Tier Distribution:**")
-                                    st.bar_chart(tier_counts)
-                                
-                                with col2:
-                                    # Display overlap patterns
-                                    st.markdown("**Flight Interest Patterns:**")
-                                    
-                                    # Count overlapping patterns
-                                    patterns = {}
-                                    for user, user_flights in overlapping_users.items():
-                                        pattern = tuple(sorted(user_flights))
-                                        if pattern not in patterns:
-                                            patterns[pattern] = 0
-                                        patterns[pattern] += 1
-                                    
-                                    # Display top patterns
-                                    for pattern, count in sorted(patterns.items(), key=lambda x: x[1], reverse=True)[:3]:
-                                        flight_names = []
-                                        for flight_id in pattern:
-                                            flight = next((f for f in st.session_state.selected_flights if f['ITEM_ID'] == flight_id), None)
-                                            if flight:
-                                                flight_names.append(f"{flight['SRC_CITY']} to {flight['DST_CITY']}")
-                                        
-                                        pattern_str = " + ".join(flight_names)
-                                        st.markdown(f"- **{pattern_str}**: {count} users")
-                        
-                        # Button to generate multi-flight email
-                        if st.button("Generate Email for Overlapping Users"):
-                            st.session_state.active_section = "emails"
-                            st.experimental_rerun()
-                    else:
-                        st.info("No overlapping users found across the selected flights")
-                else:
-                    st.info("Select at least two flights to analyze overlapping users")
-        else:
-            st.warning("No segment data available. You need to run a batch segment job first.")
-            
-            # Demo mode - allow proceeding for demo purposes
-            if st.button("Load Demo Segment Data"):
-                st.session_state.segments_loaded = True
-                st.success("Demo segment data loaded successfully")
-                st.experimental_rerun()
-
 elif st.session_state.active_section == "emails":
     st.markdown("## Email Campaign Generator")
     
     if not st.session_state.selected_flights:
         st.warning("Please select flights first in the 'Select Flights' section")
+        if st.button("Go Back to Flight Selection"):
+            st.session_state.active_section = "flights"
+            st.experimental_rerun()
     else:
         # Split the screen - left for chat, right for preview
         chat_col, preview_col = st.columns([3, 2])
@@ -857,17 +693,48 @@ elif st.session_state.active_section == "emails":
         with chat_col:
             st.markdown("### Chat with 1Shot Assistant")
             
-            if not st.session_state.segments_loaded:
+            # Check if segments exist
+            segments_exist = False
+            segments = read_s3_json(BUCKET_NAME, SEGMENTS_OUTPUT_PATH)
+            if segments:
+                flight_ids = [flight['ITEM_ID'] for flight in st.session_state.selected_flights]
+                for segment in segments:
+                    if segment.get('input', {}).get('itemId') in flight_ids:
+                        segments_exist = True
+                        break
+            
+            if not segments_exist:
                 st.markdown('<div class="warning-box">No segment data is available yet. The assistant can still generate emails, but they won\'t be personalized based on segment analysis.</div>', unsafe_allow_html=True)
             else:
                 st.markdown('<div class="info-box">Segments are loaded. The assistant can generate personalized emails based on segment analysis.</div>', unsafe_allow_html=True)
             
-            # Display chat history
-            for message in st.session_state.chat_history:
-                display_chat_message(message["role"], message["content"])
+            # Create scrollable chat container
+            chat_container = st.container()
+            
+            with chat_container:
+                st.markdown('<div class="chat-container" id="chat-container">', unsafe_allow_html=True)
+                
+                # Display chat history
+                for message in st.session_state.chat_history:
+                    if message["role"] == "user":
+                        st.markdown(f'<div class="chat-message user"><div class="avatar">👤</div><div class="content">{message["content"]}</div></div>', unsafe_allow_html=True)
+                    else:
+                        st.markdown(f'<div class="chat-message assistant"><div class="avatar">🎯</div><div class="content">{message["content"]}</div></div>', unsafe_allow_html=True)
+                
+                st.markdown('</div>', unsafe_allow_html=True)
+            
+            # Get initial value from next_input if it exists
+            initial_input = st.session_state.next_input
+            # Clear next_input for next time
+            st.session_state.next_input = ""
             
             # Input for new message
-            user_input = st.text_input("Your message:", key="user_input", placeholder="Ask me to generate email templates...")
+            user_input = st.text_input(
+                "Your message:", 
+                key="user_input", 
+                value=initial_input,
+                placeholder="Ask me to generate email templates..."
+            )
             
             send_col, suggestion_col = st.columns([1, 3])
             
@@ -879,19 +746,16 @@ elif st.session_state.active_section == "emails":
                 if st.button("Generate email for first flight", key="suggest1"):
                     if st.session_state.selected_flights:
                         flight = st.session_state.selected_flights[0]
-                        user_input = f"Generate an email template for the {flight['SRC_CITY']} to {flight['DST_CITY']} flight"
-                        send_button = True
+                        st.session_state.next_input = f"Generate an email template for the {flight['SRC_CITY']} to {flight['DST_CITY']} flight"
+                        st.experimental_rerun()
                 
-                if len(st.session_state.selected_flights) > 1 and st.button("Create email for overlapping users", key="suggest2"):
-                    user_input = "Generate an email template for users who appear in multiple flight segments"
-                    send_button = True
+                if st.button("List user segments", key="suggest2"):
+                    st.session_state.next_input = "List the available user segments for my selected flights"
+                    st.experimental_rerun()
             
             if send_button and user_input:
                 # Add user message to chat history
                 st.session_state.chat_history.append({"role": "user", "content": user_input})
-                
-                # Display user message
-                display_chat_message("user", user_input)
                 
                 # Add context about selected flights to the prompt
                 flight_context = "Selected flights:\n"
@@ -908,9 +772,6 @@ elif st.session_state.active_section == "emails":
                     # Add assistant message to chat history
                     st.session_state.chat_history.append({"role": "assistant", "content": assistant_response})
                     
-                    # Display assistant message
-                    display_chat_message("assistant", assistant_response)
-                    
                     # Check if this looks like an email template
                     if "Subject:" in assistant_response or "subject:" in assistant_response.lower():
                         email_content = extract_email_content(assistant_response)
@@ -919,13 +780,9 @@ elif st.session_state.active_section == "emails":
                         if email_content["subject"] and email_content["body"]:
                             if len(st.session_state.selected_flights) > 0:
                                 flight_id = st.session_state.selected_flights[0]["ITEM_ID"]
-                                # Check if this is for overlapping users
-                                if "overlap" in user_input.lower() or "multiple" in user_input.lower():
-                                    flight_id = "overlap_" + "_".join([f['ITEM_ID'][-5:] for f in st.session_state.selected_flights])
                                 st.session_state.email_templates[flight_id] = email_content
                 
-                # Clear the input box
-                st.session_state.user_input = ""
+                # Clear the input but don't directly modify session state
                 st.experimental_rerun()
             
             # Clear chat button
@@ -943,14 +800,11 @@ elif st.session_state.active_section == "emails":
                 if len(st.session_state.email_templates) > 1:
                     preview_options = []
                     for flight_id, _ in st.session_state.email_templates.items():
-                        if flight_id.startswith("overlap_"):
-                            preview_options.append("Multi-flight template")
+                        flight = next((f for f in st.session_state.selected_flights if f['ITEM_ID'] == flight_id), None)
+                        if flight:
+                            preview_options.append(f"{flight['SRC_CITY']} to {flight['DST_CITY']}")
                         else:
-                            flight = next((f for f in st.session_state.selected_flights if f['ITEM_ID'] == flight_id), None)
-                            if flight:
-                                preview_options.append(f"{flight['SRC_CITY']} to {flight['DST_CITY']}")
-                            else:
-                                preview_options.append(f"Template {flight_id[-5:]}")
+                            preview_options.append(f"Template {flight_id[-5:]}")
                     
                     selected_preview = st.selectbox("Select template to preview:", preview_options)
                     
@@ -976,6 +830,31 @@ elif st.session_state.active_section == "emails":
                 # Actions for the selected template
                 st.markdown("### Template Actions")
                 
+                # Get segment users for this flight
+                segment_users = get_segment_users(selected_flight_id)
+                user_count = len(segment_users)
+                
+                # Display user segment information
+                if user_count > 0:
+                    st.markdown(f"**Users in segment:** {user_count}")
+                    
+                    # Show sample of user IDs
+                    with st.expander("View sample users"):
+                        sample_size = min(5, user_count)
+                        st.code("\n".join(segment_users[:sample_size]) + ("\n..." if user_count > sample_size else ""))
+                    
+                    # Download user list button
+                    user_list_csv = "USER_ID\n" + "\n".join(segment_users)
+                    st.download_button(
+                        label="Download User List (CSV)",
+                        data=user_list_csv,
+                        file_name=f"user_segment_{selected_flight_id[-5:]}.csv",
+                        mime="text/csv"
+                    )
+                else:
+                    st.warning("No user segment available for this flight.")
+                
+                # Template actions
                 col1, col2 = st.columns(2)
                 
                 with col1:
@@ -989,28 +868,61 @@ elif st.session_state.active_section == "emails":
                     )
                 
                 with col2:
-                    # Button to enhance the template
-                    if st.button("Improve This Template"):
-                        improve_prompt = "Please improve this email template. Make it more engaging and personal."
-                        st.session_state.chat_history.append({"role": "user", "content": improve_prompt})
-                        st.session_state.user_input = improve_prompt
-                        st.experimental_rerun()
+                    # Button to upload template to S3
+                    if st.button("Upload Template to S3", use_container_width=True):
+                        with st.spinner("Uploading template to S3..."):
+                            result = upload_template_to_s3(
+                                selected_flight_id,
+                                email_content['subject'],
+                                email_content['body']
+                            )
+                            
+                            if result['success']:
+                                st.session_state.template_uploaded = True
+                                st.session_state.template_upload_result = result
+                                st.success(f"Template uploaded successfully: {result['url']}")
+                            else:
+                                st.error(f"Failed to upload template: {result.get('error', 'Unknown error')}")
                 
-                # Target audience info
-                st.markdown("### Target Audience")
+                # If template was uploaded, show details
+                if st.session_state.template_uploaded and hasattr(st.session_state, 'template_upload_result'):
+                    result = st.session_state.template_upload_result
+                    st.markdown('<div class="success-box">', unsafe_allow_html=True)
+                    st.markdown(f"**Template uploaded to S3:**")
+                    st.markdown(f"- **Path:** {result['s3_path']}")
+                    st.markdown(f"- **URL:** {result['url']}")
+                    st.markdown("</div>", unsafe_allow_html=True)
                 
-                if selected_flight_id.startswith("overlap_"):
-                    st.markdown("This template targets users who have shown interest in **multiple flights**.")
-                    st.markdown("- **Estimated audience size:** 100 users")
-                    st.markdown("- **Member distribution:** 40% Gold, 35% Silver, 25% Regular")
-                else:
-                    flight = next((f for f in st.session_state.selected_flights if f['ITEM_ID'] == selected_flight_id), None)
-                    if flight:
-                        st.markdown(f"This template targets users interested in **{flight['SRC_CITY']} to {flight['DST_CITY']}**.")
-                        st.markdown("- **Estimated audience size:** 150 users")
-                        st.markdown("- **Member distribution:** 35% Gold, 35% Silver, 30% Regular")
-                
-                st.markdown("<div class='info-box'>Templates are ready to be sent to your email marketing platform.</div>", unsafe_allow_html=True)
+                # Button to enhance the template
+                if st.button("Improve This Template"):
+                    # Use next_input to store the suggestion instead of directly modifying user_input
+                    st.session_state.next_input = "Please improve this email template. Make it more engaging and personal."
+                    st.experimental_rerun()
+
+# Add JavaScript to auto-scroll chat container to bottom
+st.markdown("""
+<script>
+    // Function to scroll chat container to bottom
+    function scrollToBottom() {
+        const chatContainer = document.getElementById('chat-container');
+        if (chatContainer) {
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+    }
+    
+    // Call function when page loads
+    window.addEventListener('load', scrollToBottom);
+    
+    // Set up MutationObserver to detect changes in chat container
+    const observer = new MutationObserver(scrollToBottom);
+    
+    // Start observing chat container for changes
+    const chatContainer = document.getElementById('chat-container');
+    if (chatContainer) {
+        observer.observe(chatContainer, { childList: true, subtree: true });
+    }
+</script>
+""", unsafe_allow_html=True)
 
 # App footer
 st.markdown("---")
@@ -1019,13 +931,14 @@ st.markdown("### How to Use This Application")
 with st.expander("App Instructions"):
     st.markdown("""
     1. **Select Flights**: Choose promotional flights to target in your campaign
-    2. **View Segments**: Review user segments for these flights
-    3. **Generate Emails**: Chat with the assistant to create personalized email templates
+    2. **Generate Emails**: Chat with the assistant to create personalized email templates
+    3. **Download User List**: Get the list of users to target with your campaign
+    4. **Upload to S3**: Save approved templates to S3 for use in your marketing system
     
     **Quick Tips:**
     - You can ask the assistant to generate templates for specific flights
-    - For multiple flights, ask for a template targeting users in overlapping segments
     - Request enhancements to any template (e.g., "Make it more personalized")
+    - Download both the email template and user list for your marketing platform
     """)
 
 with st.expander("About 1Shot Email Marketing"):
