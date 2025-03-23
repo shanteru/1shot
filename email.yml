@@ -1,0 +1,310 @@
+openapi: "3.0.1"
+info:
+  title: "EmailGeneration API"
+  description: "API for generating email content for marketing campaigns"
+  version: "1.0.0"
+paths:
+  /listAvailableSegments:
+    post:
+      description: "List all available segments from the batch output file"
+      operationId: "listAvailableSegments"
+      responses:
+        "200":
+          description: "Successfully retrieved available segments"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SegmentListResponse"
+        "500":
+          description: "Internal server error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  
+  /generateEmailContent:
+    post:
+      description: "Generate personalized email content for a specific flight segment"
+      operationId: "generateEmailContent"
+      parameters:
+        - name: "flightId"
+          in: "query"
+          description: "ID of the flight to generate email content for"
+          required: true
+          schema:
+            type: "string"
+      responses:
+        "200":
+          description: "Successfully generated email content"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailContentResponse"
+        "500":
+          description: "Internal server error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  
+  /generateMultiFlightEmail:
+    post:
+      description: "Generate email content for users who appear in multiple flight segments"
+      operationId: "generateMultiFlightEmail"
+      parameters:
+        - name: "flightIds"
+          in: "query"
+          description: "List of flight IDs to analyze for overlapping users"
+          required: true
+          schema:
+            type: "array"
+            items:
+              type: "string"
+      responses:
+        "200":
+          description: "Successfully generated multi-flight email content"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MultiFlightEmailResponse"
+        "500":
+          description: "Internal server error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  
+  /saveEmailTemplate:
+    post:
+      description: "Save a finalized email template to S3"
+      operationId: "saveEmailTemplate"
+      parameters:
+        - name: "flightId"
+          in: "query"
+          description: "ID of the flight the email is for"
+          required: true
+          schema:
+            type: "string"
+        - name: "emailSubject"
+          in: "query"
+          description: "Subject line of the email"
+          required: true
+          schema:
+            type: "string"
+        - name: "emailBody"
+          in: "query"
+          description: "Body content of the email"
+          required: true
+          schema:
+            type: "string"
+      responses:
+        "200":
+          description: "Successfully saved email template"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SaveTemplateResponse"
+
+components:
+  schemas:
+    SegmentListResponse:
+      type: "object"
+      properties:
+        status:
+          type: "string"
+          enum: ["success", "warning", "error"]
+          description: "Status of the operation"
+        segments:
+          type: "array"
+          items:
+            type: "object"
+            properties:
+              flightId:
+                type: "string"
+                description: "ID of the flight"
+              source:
+                type: "string"
+                description: "Departure city"
+              destination:
+                type: "string"
+                description: "Arrival city"
+              airline:
+                type: "string"
+                description: "Airline name"
+              month:
+                type: "string"
+                description: "Month of the flight"
+              userCount:
+                type: "integer"
+                description: "Number of users in the segment"
+        totalSegments:
+          type: "integer"
+          description: "Total number of segments available"
+    
+    EmailContentResponse:
+      type: "object"
+      properties:
+        status:
+          type: "string"
+          enum: ["success", "warning", "error"]
+          description: "Status of the operation"
+        flightDetails:
+          type: "object"
+          properties:
+            flightId:
+              type: "string"
+              description: "ID of the flight"
+            source:
+              type: "string"
+              description: "Departure city"
+            destination:
+              type: "string"
+              description: "Arrival city"
+            airline:
+              type: "string"
+              description: "Airline name"
+            month:
+              type: "string"
+              description: "Month of the flight"
+            price:
+              type: "number"
+              description: "Price of the flight"
+            duration:
+              type: "integer"
+              description: "Duration of the flight in days"
+            promotionCode:
+              type: "string"
+              description: "Promotion code for the flight"
+        segmentDetails:
+          type: "object"
+          properties:
+            userCount:
+              type: "integer"
+              description: "Number of users in the segment"
+            userSample:
+              type: "array"
+              items:
+                type: "string"
+              description: "Sample of user IDs in the segment"
+            tierDistribution:
+              type: "object"
+              additionalProperties:
+                type: "integer"
+              description: "Distribution of membership tiers"
+        interactionInsights:
+          type: "object"
+          properties:
+            averageRating:
+              type: "number"
+              description: "Average rating for the flight"
+            cabinTypeDistribution:
+              type: "object"
+              additionalProperties:
+                type: "integer"
+              description: "Distribution of cabin types"
+            ratingDistribution:
+              type: "object"
+              additionalProperties:
+                type: "integer"
+              description: "Distribution of ratings"
+            totalInteractions:
+              type: "integer"
+              description: "Total number of interactions"
+        emailSuggestions:
+          type: "object"
+          properties:
+            subjectLine:
+              type: "string"
+              description: "Suggested subject line for the email"
+            keyPoints:
+              type: "array"
+              items:
+                type: "string"
+              description: "Key points to include in the email"
+    
+    MultiFlightEmailResponse:
+      type: "object"
+      properties:
+        status:
+          type: "string"
+          enum: ["success", "warning", "error"]
+          description: "Status of the operation"
+        overlappingUsers:
+          type: "integer"
+          description: "Number of users who appear in multiple segments"
+        userSample:
+          type: "array"
+          items:
+            type: "string"
+          description: "Sample of overlapping user IDs"
+        flights:
+          type: "array"
+          items:
+            type: "object"
+            properties:
+              flightId:
+                type: "string"
+                description: "ID of the flight"
+              source:
+                type: "string"
+                description: "Departure city"
+              destination:
+                type: "string"
+                description: "Arrival city"
+              airline:
+                type: "string"
+                description: "Airline name"
+              month:
+                type: "string"
+                description: "Month of the flight"
+              price:
+                type: "number"
+                description: "Price of the flight"
+              promotionCode:
+                type: "string"
+                description: "Promotion code for the flight"
+        tierDistribution:
+          type: "object"
+          additionalProperties:
+            type: "integer"
+          description: "Distribution of membership tiers among overlapping users"
+        emailSuggestions:
+          type: "object"
+          properties:
+            subjectLine:
+              type: "string"
+              description: "Suggested subject line for the email"
+            approach:
+              type: "string"
+              description: "Suggested approach for the email content"
+    
+    SaveTemplateResponse:
+      type: "object"
+      properties:
+        status:
+          type: "string"
+          enum: ["success", "error"]
+          description: "Status of the operation"
+        message:
+          type: "string"
+          description: "Message describing the result"
+        filename:
+          type: "string"
+          description: "Name of the saved template file"
+        s3Path:
+          type: "string"
+          description: "S3 path where the template was stored"
+        downloadUrl:
+          type: "string"
+          description: "URL to download the template file"
+    
+    ErrorResponse:
+      type: "object"
+      properties:
+        status:
+          type: "string"
+          enum: ["error"]
+          description: "Status of the operation"
+        message:
+          type: "string"
+          description: "Error message"

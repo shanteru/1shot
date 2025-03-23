@@ -1,0 +1,142 @@
+openapi: "3.0.1"
+info:
+  title: "FlightManagement API"
+  description: "API for retrieving flight information and preparing input files"
+  version: "1.0.0"
+paths:
+  /listPromotionalFlights:
+    post:
+      description: "List all promotional flights available for email campaigns"
+      operationId: "listPromotionalFlights"
+      parameters:
+        - name: "month"
+          in: "query"
+          description: "Filter flights by month (optional)"
+          required: false
+          schema:
+            type: "string"
+        - name: "destination"
+          in: "query"
+          description: "Filter flights by destination city (optional)"
+          required: false
+          schema:
+            type: "string"
+      responses:
+        "200":
+          description: "Successfully retrieved promotional flights"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FlightListResponse"
+        "500":
+          description: "Internal server error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  
+  /prepareSegmentInput:
+    post:
+      description: "Format flight IDs into proper JSON format for batch segmentation"
+      operationId: "prepareSegmentInput"
+      parameters:
+        - name: "flightIds"
+          in: "query"
+          description: "List of flight IDs to include in the segment input"
+          required: true
+          schema:
+            type: "array"
+            items:
+              type: "string"
+      responses:
+        "200":
+          description: "Successfully formatted segment input JSON"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SegmentInputResponse"
+        "500":
+          description: "Internal server error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  schemas:
+    FlightListResponse:
+      type: "object"
+      properties:
+        flights:
+          type: "array"
+          items:
+            type: "object"
+            properties:
+              itemId:
+                type: "string"
+                description: "Unique identifier for the flight"
+              source:
+                type: "string"
+                description: "Departure city"
+              destination:
+                type: "string"
+                description: "Arrival city"
+              airline:
+                type: "string"
+                description: "Airline name"
+              month:
+                type: "string"
+                description: "Month of the flight"
+              price:
+                type: "number"
+                description: "Price of the flight"
+              duration:
+                type: "integer"
+                description: "Duration of the flight in days"
+              hasSegment:
+                type: "boolean"
+                description: "Whether a user segment exists for this flight"
+        totalCount:
+          type: "integer"
+          description: "Total number of flights in the response"
+        monthOptions:
+          type: "array"
+          items:
+            type: "string"
+          description: "Available months for filtering"
+        destinationOptions:
+          type: "array"
+          items:
+            type: "string"
+          description: "Available destinations for filtering"
+    
+    SegmentInputResponse:
+      type: "object"
+      properties:
+        status:
+          type: "string"
+          enum: ["success", "error"]
+          description: "Status of the operation"
+        message:
+          type: "string"
+          description: "Message describing the result"
+        jsonContent:
+          type: "string"
+          description: "JSON content in proper format for batch segment job"
+        flightCount:
+          type: "integer"
+          description: "Number of flights included in the JSON"
+        instructions:
+          type: "string"
+          description: "Instructions for using the JSON file"
+    
+    ErrorResponse:
+      type: "object"
+      properties:
+        status:
+          type: "string"
+          enum: ["error"]
+          description: "Status of the operation"
+        message:
+          type: "string"
+          description: "Error message"
